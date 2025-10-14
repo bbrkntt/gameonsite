@@ -127,7 +127,8 @@ export default function App() {
 
     return (
         <HashRouter>
-            <div className="min-h-screen bg-gradient-to-br from-zinc-950 via-neutral-900 to-zinc-900 text-white">
+            <div className="min-h-screen bg-neutral-900 text-white">
+
                 <Header lang={lang} setLang={setLang} />
                 <Routes>
                     <Route path="/" element={<HomePage lang={lang} onJoin={addRandomTeam} />} />
