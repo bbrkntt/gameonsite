@@ -15,6 +15,9 @@ import {
 } from "lucide-react";
 import { HashRouter, Routes, Route, Link } from "react-router-dom";
 import logo from "./assets/logo.png";
+import { db } from "./firebase";
+import { collection, getDocs, setDoc, doc } from "firebase/firestore";
+
 
 /* =============================
    STORAGE KEYS
@@ -109,19 +112,40 @@ const L = {
 /* =============================
    HELPERS
 ============================= */
-function load(key, fallback) {
+async function load(key, fallback) {
     try {
-        const s = localStorage.getItem(key);
-        return s ? JSON.parse(s) : fallback;
-    } catch {
+        const colRef = collection(db, key);
+        const snapshot = await getDocs(colRef);
+        if (!snapshot.empty) {
+            const data = {};
+            snapshot.forEach((docSnap) => (data[docSnap.id] = docSnap.data()));
+            return key === "gameon_groups" ? data : Object.values(data);
+        }
+        return fallback;
+    } catch (err) {
+        console.error("Firestore load error:", err);
         return fallback;
     }
 }
-function save(key, value) {
+
+async function save(key, data) {
     try {
-        localStorage.setItem(key, JSON.stringify(value));
-    } catch { }
+        if (Array.isArray(data)) {
+            for (const item of data) {
+                await setDoc(doc(db, key, item.id || `id-${Date.now()}`), item);
+            }
+        } else {
+            for (const [gid, teams] of Object.entries(data)) {
+                for (const team of teams) {
+                    await setDoc(doc(db, key, team.id), { ...team, group: gid });
+                }
+            }
+        }
+    } catch (err) {
+        console.error("Firestore save error:", err);
+    }
 }
+
 
 /* =============================
    APP
