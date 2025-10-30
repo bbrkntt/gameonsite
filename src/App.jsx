@@ -1,5 +1,5 @@
 // src/App.jsx
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
     Flame,
     Calendar,
@@ -18,36 +18,43 @@ import logo from "./assets/logo.png";
 import { db } from "./firebase";
 import {
     collection,
-    getDocs,
-    setDoc,
-    doc,
+    onSnapshot,
+    addDoc,
+    updateDoc,
     deleteDoc,
+    doc,
 } from "firebase/firestore";
 
 /* =============================
-   STORAGE KEYS
+   LOCAL STORAGE (sadece dil için)
 ============================= */
-const STORAGE = {
-    GROUPS: "gameon_groups",     // collection: teams (each doc has {group: 'A'|'B'|'C', ...})
-    FIXTURES: "gameon_fixtures", // collection: fixtures
-    RESULTS: "gameon_results",   // collection: results
-};
+const STORAGE = { LANG: "gameon_lang" };
 
 /* =============================
-   DEFAULT DATA
-============================= */
-const INITIAL_GROUPS = { A: [], B: [], C: [] };
-const INITIAL_FIXTURES = [];
-const INITIAL_RESULTS = [];
-
-/* =============================
-   LANGUAGES (EN / IT)
+   DİL METİNLERİ (EN/IT)
 ============================= */
 const L = {
     en: {
-        nav: { home: "Home", join: "Join", groups: "Groups", fixture: "Fixture", results: "Results", admin: "Admin" },
-        home: { title: "⚽ Football Tournament ⚽", desc: "Join the tournament and fight for glory!", cta: "Join Now" },
-        join: { title: "Team Registration", name: "Team Name", email: "Email", submit: "Register", success: "✅ Registration successful!" },
+        nav: {
+            home: "Home",
+            join: "Join",
+            groups: "Groups",
+            fixture: "Fixture",
+            results: "Results",
+            admin: "Admin",
+        },
+        home: {
+            title: "⚽ Football Tournament ⚽",
+            desc: "Join the tournament and fight for glory!",
+            cta: "Join Now",
+        },
+        join: {
+            title: "Team Registration",
+            name: "Team Name",
+            email: "Email",
+            submit: "Register",
+            success: "✅ Registration successful!",
+        },
         groups: { title: "Group Standings" },
         fixture: { title: "Fixture" },
         results: { title: "Match Results" },
@@ -57,22 +64,34 @@ const L = {
             login: "Log In",
             addFixture: "Add Fixture",
             addResult: "Add Result",
-            teams: "Teams (Add / Delete)",
+            teams: "Teams (Edit / Delete)",
             fixtures: "Edit Fixtures",
             results: "Edit Results",
             delete: "Delete",
-            addTeam: "Add Team",
-            teamName: "Team Name",
-            teamEmail: "Email (optional)",
-            group: "Group",
-            save: "Save",
         },
         footerHome: "Home",
     },
     it: {
-        nav: { home: "Home", join: "Iscriviti", groups: "Gruppi", fixture: "Calendario", results: "Risultati", admin: "Admin" },
-        home: { title: "⚽ Torneo di Calcio ⚽", desc: "Partecipa al torneo e combatti per la gloria!", cta: "Iscriviti ora" },
-        join: { title: "Registrazione Squadra", name: "Nome Squadra", email: "Email", submit: "Registrati", success: "✅ Registrazione avvenuta con successo!" },
+        nav: {
+            home: "Home",
+            join: "Iscriviti",
+            groups: "Gruppi",
+            fixture: "Calendario",
+            results: "Risultati",
+            admin: "Admin",
+        },
+        home: {
+            title: "⚽ Torneo di Calcio ⚽",
+            desc: "Partecipa al torneo e combatti per la gloria!",
+            cta: "Iscriviti ora",
+        },
+        join: {
+            title: "Registrazione Squadra",
+            name: "Nome Squadra",
+            email: "Email",
+            submit: "Registrati",
+            success: "✅ Registrazione avvenuta con successo!",
+        },
         groups: { title: "Classifiche Gruppi" },
         fixture: { title: "Calendario" },
         results: { title: "Risultati Partite" },
@@ -82,73 +101,139 @@ const L = {
             login: "Accedi",
             addFixture: "Aggiungi Partita",
             addResult: "Aggiungi Risultato",
-            teams: "Squadre (Aggiungi / Elimina)",
+            teams: "Squadre (Modifica / Elimina)",
             fixtures: "Modifica Calendario",
             results: "Modifica Risultati",
             delete: "Elimina",
-            addTeam: "Aggiungi Squadra",
-            teamName: "Nome Squadra",
-            teamEmail: "Email (opzionale)",
-            group: "Gruppo",
-            save: "Salva",
         },
         footerHome: "Home",
     },
 };
 
 /* =============================
-   FIRESTORE HELPERS
+   Firestore CRUD — tek yerde
 ============================= */
-async function loadData(key, fallback) {
-    try {
-        const colRef = collection(db, key);
-        const snapshot = await getDocs(colRef);
-        if (snapshot.empty) return fallback;
-
-        if (key === STORAGE.GROUPS) {
-            const groups = { A: [], B: [], C: [] };
-            snapshot.forEach((docSnap) => {
-                const data = docSnap.data();
-                const g = data.group || "A";
-                if (groups[g]) groups[g].push(data);
-            });
-            return groups;
-        } else {
-            return snapshot.docs.map((d) => d.data());
-        }
-    } catch (err) {
-        console.error("Firestore load error:", err);
-        return fallback;
-    }
+// Takım ekle (rastgele grup)
+async function addTeam({ name, email }) {
+    const letters = ["A", "B", "C"];
+    const group = letters[Math.floor(Math.random() * letters.length)];
+    await addDoc(collection(db, "teams"), {
+        name: String(name || "").trim(),
+        email: String(email || "").trim(),
+        group,
+        logo: "⚽",
+        played: 0,
+        win: 0,
+        draw: 0,
+        loss: 0,
+        points: 0,
+        createdAt: Date.now(),
+    });
+}
+async function removeTeam(teamId) {
+    await deleteDoc(doc(db, "teams", teamId));
+}
+async function updateTeamPoints(teamId, points) {
+    await updateDoc(doc(db, "teams", teamId), { points: Number(points) || 0 });
 }
 
-async function saveDoc(key, obj) {
-    // upsert single document by id
-    await setDoc(doc(db, key, obj.id), obj);
+// Fikstür
+async function addFixtureFS(newFixture) {
+    await addDoc(collection(db, "fixtures"), {
+        match: newFixture.match || "",
+        date: newFixture.date || "",
+        time: newFixture.time || "",
+        createdAt: Date.now(),
+    });
+}
+async function updateFixtureFS(id, patch) {
+    await updateDoc(doc(db, "fixtures", id), patch);
+}
+async function removeFixtureFS(id) {
+    await deleteDoc(doc(db, "fixtures", id));
 }
 
-async function deleteById(key, id) {
-    await deleteDoc(doc(db, key, id));
+// Sonuçlar
+async function addResultFS(newResult) {
+    await addDoc(collection(db, "results"), {
+        home: newResult.home || "",
+        away: newResult.away || "",
+        homeScore: Number(newResult.hs || 0),
+        awayScore: Number(newResult.as || 0),
+        createdAt: Date.now(),
+    });
+}
+async function updateResultFS(id, patch) {
+    await updateDoc(doc(db, "results", id), patch);
+}
+async function removeResultFS(id) {
+    await deleteDoc(doc(db, "results", id));
 }
 
 /* =============================
-   APP
+   APP (real-time snapshot’lar)
 ============================= */
 export default function App() {
-    const [lang, setLang] = useState("en");
-    const [groups, setGroups] = useState(INITIAL_GROUPS);
-    const [fixtures, setFixtures] = useState(INITIAL_FIXTURES);
-    const [results, setResults] = useState(INITIAL_RESULTS);
+    // Dil (local)
+    const [lang, setLang] = useState(() => {
+        try {
+            return localStorage.getItem(STORAGE.LANG) || "en";
+        } catch {
+            return "en";
+        }
+    });
+    useEffect(() => {
+        try {
+            localStorage.setItem(STORAGE.LANG, lang);
+        } catch { }
+    }, [lang]);
+
+    // Firestore verileri
+    const [teams, setTeams] = useState([]); // {id, name, email, group, ...}
+    const [fixtures, setFixtures] = useState([]);
+    const [results, setResults] = useState([]);
     const [isAdmin, setIsAdmin] = useState(false);
 
-    // İlk yüklemede Firestore'dan çek
+    // Gerçek zamanlı dinleme
     useEffect(() => {
-        (async () => {
-            setGroups(await loadData(STORAGE.GROUPS, INITIAL_GROUPS));
-            setFixtures(await loadData(STORAGE.FIXTURES, INITIAL_FIXTURES));
-            setResults(await loadData(STORAGE.RESULTS, INITIAL_RESULTS));
-        })();
+        const unsubTeams = onSnapshot(collection(db, "teams"), (snap) => {
+            setTeams(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        });
+        const unsubFixtures = onSnapshot(collection(db, "fixtures"), (snap) => {
+            setFixtures(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        });
+        const unsubResults = onSnapshot(collection(db, "results"), (snap) => {
+            setResults(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        });
+        return () => {
+            unsubTeams();
+            unsubFixtures();
+            unsubResults();
+        };
     }, []);
+
+    // UI’nin beklediği groups objesini türet
+    const groups = useMemo(() => {
+        const A = [],
+            B = [],
+            C = [];
+        for (const t of teams) {
+            const pack = {
+                id: t.id,
+                name: t.name,
+                logo: t.logo ?? "⚽",
+                played: t.played ?? 0,
+                win: t.win ?? 0,
+                draw: t.draw ?? 0,
+                loss: t.loss ?? 0,
+                points: t.points ?? 0,
+            };
+            if (t.group === "A") A.push(pack);
+            else if (t.group === "B") B.push(pack);
+            else if (t.group === "C") C.push(pack);
+        }
+        return { A, B, C };
+    }, [teams]);
 
     return (
         <HashRouter>
@@ -156,10 +241,16 @@ export default function App() {
                 <Header lang={lang} setLang={setLang} />
                 <Routes>
                     <Route path="/" element={<HomePage lang={lang} />} />
-                    <Route path="/join" element={<JoinPage lang={lang} groups={groups} setGroups={setGroups} />} />
+                    <Route path="/join" element={<JoinPage lang={lang} />} />
                     <Route path="/groups" element={<GroupsPage lang={lang} groups={groups} />} />
-                    <Route path="/fixture" element={<FixturePage lang={lang} fixtures={fixtures} />} />
-                    <Route path="/results" element={<ResultsPage lang={lang} results={results} />} />
+                    <Route
+                        path="/fixture"
+                        element={<FixturePage lang={lang} fixtures={fixtures} />}
+                    />
+                    <Route
+                        path="/results"
+                        element={<ResultsPage lang={lang} results={results} />}
+                    />
                     <Route
                         path="/admin"
                         element={
@@ -168,11 +259,17 @@ export default function App() {
                                 isAdmin={isAdmin}
                                 setIsAdmin={setIsAdmin}
                                 groups={groups}
-                                setGroups={setGroups}
                                 fixtures={fixtures}
-                                setFixtures={setFixtures}
                                 results={results}
-                                setResults={setResults}
+                                addTeam={addTeam}
+                                removeTeam={removeTeam}
+                                updateTeamPoints={updateTeamPoints}
+                                addFixtureFS={addFixtureFS}
+                                updateFixtureFS={updateFixtureFS}
+                                removeFixtureFS={removeFixtureFS}
+                                addResultFS={addResultFS}
+                                updateResultFS={updateResultFS}
+                                removeResultFS={removeResultFS}
                             />
                         }
                     />
@@ -187,7 +284,7 @@ export default function App() {
    HEADER
 ============================= */
 function Header({ lang, setLang }) {
-    const T = L[lang]?.nav || L.en.nav;
+    const T = L[lang] ? L[lang].nav : L.en.nav;
     const [open, setOpen] = useState(false);
 
     const NavLink = ({ to, label }) => (
@@ -264,12 +361,14 @@ function Header({ lang, setLang }) {
    FOOTER
 ============================= */
 function Footer({ lang }) {
-    const T = L[lang] || L.en;
+    const T = L[lang] ? L[lang] : L.en;
     return (
         <footer className="border-t border-white/5 mt-10">
             <div className="mx-auto max-w-7xl px-4 py-8 text-sm text-white/60 flex items-center justify-between">
                 <span>© {new Date().getFullYear()} GAMEON</span>
-                <Link to="/" className="hover:text-orange-400 transition">{T.footerHome}</Link>
+                <Link to="/" className="hover:text-orange-400 transition">
+                    {T.footerHome}
+                </Link>
             </div>
         </footer>
     );
@@ -279,7 +378,7 @@ function Footer({ lang }) {
    PAGES
 ============================= */
 function HomePage({ lang }) {
-    const T = L[lang]?.home || L.en.home;
+    const T = L[lang] ? L[lang].home : L.en.home;
     return (
         <div className="mx-auto max-w-7xl px-4 py-20 text-center">
             <h1 className="text-5xl font-extrabold mb-4">{T.title}</h1>
@@ -294,42 +393,22 @@ function HomePage({ lang }) {
     );
 }
 
-function JoinPage({ lang, groups, setGroups }) {
-    const T = L[lang]?.join || L.en.join;
+function JoinPage({ lang }) {
+    const T = L[lang] ? L[lang].join : L.en.join;
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
     const [success, setSuccess] = useState(false);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (!name || !email) return;
-
-        const keys = Object.keys(groups); // ["A","B","C"]
-        const rnd = keys[Math.floor(Math.random() * keys.length)];
-
-        const newTeam = {
-            id: `T-${Date.now()}`,
-            name: name.trim(),
-            logo: "⚽",
-            group: rnd,
-            played: 0,
-            win: 0,
-            draw: 0,
-            loss: 0,
-            points: 0,
-            email,
-        };
-
-        // Firestore'a yaz (doc id sabit)
-        await saveDoc(STORAGE.GROUPS, newTeam);
-
-        // State'e ekle
-        setGroups({ ...groups, [rnd]: [...groups[rnd], newTeam] });
-
+        const n = String(name || "").trim();
+        const m = String(email || "").trim();
+        if (!n || !m) return;
+        await addTeam({ name: n, email: m });
         setName("");
         setEmail("");
         setSuccess(true);
-        setTimeout(() => setSuccess(false), 2000);
+        setTimeout(() => setSuccess(false), 2500);
     };
 
     return (
@@ -364,38 +443,41 @@ function JoinPage({ lang, groups, setGroups }) {
 }
 
 function GroupsPage({ lang, groups }) {
-    const T = L[lang]?.groups || L.en.groups;
+    const T = L[lang] ? L[lang].groups : L.en.groups;
     return (
         <div className="max-w-7xl mx-auto px-4 py-12 text-center">
             <h2 className="text-4xl font-bold mb-8">{T.title}</h2>
             <div className="grid md:grid-cols-3 gap-6">
-                {Object.entries(groups).map(([gid, teams]) => (
-                    <div key={gid} className="bg-white/5 p-4 rounded-xl border border-white/10">
-                        <h3 className="text-2xl font-semibold mb-3">Group {gid}</h3>
-                        {teams.length === 0 ? (
-                            <p className="text-white/40">No teams yet</p>
-                        ) : (
-                            <table className="w-full text-sm border-separate border-spacing-y-2">
-                                <thead className="bg-white/10">
-                                    <tr>
-                                        <th className="text-left p-1">Team</th>
-                                        <th>P</th><th>W</th><th>D</th><th>L</th><th>Pts</th>
+                {Object.entries(groups).map(([key, teams]) => (
+                    <div key={key} className="bg-white/5 p-4 rounded-xl border border-white/10">
+                        <h3 className="text-2xl font-semibold mb-3">Group {key}</h3>
+                        <table className="w-full text-sm border-separate border-spacing-y-2">
+                            <thead className="bg-white/10">
+                                <tr>
+                                    <th className="text-left p-1">Team</th>
+                                    <th>P</th>
+                                    <th>W</th>
+                                    <th>D</th>
+                                    <th>L</th>
+                                    <th>Pts</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {teams.map((t) => (
+                                    <tr key={t.id} className="bg-white/5">
+                                        <td className="flex items-center gap-2 p-1 text-left">
+                                            <span>{t.logo}</span>
+                                            {t.name}
+                                        </td>
+                                        <td className="text-center">{t.played}</td>
+                                        <td className="text-center">{t.win}</td>
+                                        <td className="text-center">{t.draw}</td>
+                                        <td className="text-center">{t.loss}</td>
+                                        <td className="text-center">{t.points}</td>
                                     </tr>
-                                </thead>
-                                <tbody>
-                                    {teams.map((t) => (
-                                        <tr key={t.id} className="bg-white/5">
-                                            <td className="text-left p-1">{t.name}</td>
-                                            <td className="text-center">{t.played}</td>
-                                            <td className="text-center">{t.win}</td>
-                                            <td className="text-center">{t.draw}</td>
-                                            <td className="text-center">{t.loss}</td>
-                                            <td className="text-center">{t.points}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        )}
+                                ))}
+                            </tbody>
+                        </table>
                     </div>
                 ))}
             </div>
@@ -404,7 +486,7 @@ function GroupsPage({ lang, groups }) {
 }
 
 function FixturePage({ lang, fixtures }) {
-    const T = L[lang]?.fixture || L.en.fixture;
+    const T = L[lang] ? L[lang].fixture : L.en.fixture;
     return (
         <div className="max-w-5xl mx-auto px-4 py-12">
             <h2 className="text-3xl font-bold mb-6 flex items-center gap-2">
@@ -414,7 +496,9 @@ function FixturePage({ lang, fixtures }) {
                 {fixtures.map((f) => (
                     <div key={f.id} className="rounded-xl bg-white/5 ring-1 ring-white/10 p-4">
                         <div className="font-semibold mb-2">{f.match}</div>
-                        <div className="text-sm text-white/70">📅 {f.date} | 🕓 {f.time}</div>
+                        <div className="text-sm text-white/70">
+                            📅 {f.date} | 🕓 {f.time}
+                        </div>
                     </div>
                 ))}
             </div>
@@ -423,7 +507,7 @@ function FixturePage({ lang, fixtures }) {
 }
 
 function ResultsPage({ lang, results }) {
-    const T = L[lang]?.results || L.en.results;
+    const T = L[lang] ? L[lang].results : L.en.results;
     return (
         <div className="max-w-5xl mx-auto px-4 py-12">
             <h2 className="text-3xl font-bold mb-6 flex items-center gap-2">
@@ -431,10 +515,15 @@ function ResultsPage({ lang, results }) {
             </h2>
             <div className="grid md:grid-cols-2 gap-4">
                 {results.map((m) => (
-                    <div key={m.id} className="rounded-xl bg-white/5 ring-1 ring-white/10 p-4 flex justify-between">
-                        <div>{m.home}</div>
-                        <div className="font-bold">{m.homeScore} - {m.awayScore}</div>
-                        <div>{m.away}</div>
+                    <div
+                        key={m.id}
+                        className="rounded-xl bg-white/5 ring-1 ring-white/10 p-4 flex justify-between"
+                    >
+                        <div className="flex gap-2 items-center">{m.home}</div>
+                        <div className="font-bold">
+                            {m.homeScore} - {m.awayScore}
+                        </div>
+                        <div className="flex gap-2 items-center">{m.away}</div>
                     </div>
                 ))}
             </div>
@@ -443,19 +532,29 @@ function ResultsPage({ lang, results }) {
 }
 
 /* =============================
-   ADMIN (Full CRUD)
+   ADMIN
 ============================= */
-function AdminPage({ lang, isAdmin, setIsAdmin, groups, setGroups, fixtures, setFixtures, results, setResults }) {
-    const T = L[lang]?.admin || L.en.admin;
+function AdminPage({
+    lang,
+    isAdmin,
+    setIsAdmin,
+    groups,
+    fixtures,
+    results,
+    addTeam,
+    removeTeam,
+    updateTeamPoints,
+    addFixtureFS,
+    updateFixtureFS,
+    removeFixtureFS,
+    addResultFS,
+    updateResultFS,
+    removeResultFS,
+}) {
+    const T = L[lang] ? L[lang].admin : L.en.admin;
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
 
-    // Add team
-    const [tName, setTName] = useState("");
-    const [tEmail, setTEmail] = useState("");
-    const [tGroup, setTGroup] = useState("A");
-
-    // Add fixture/result
     const [newFixture, setNewFixture] = useState({ match: "", date: "", time: "" });
     const [newResult, setNewResult] = useState({ home: "", away: "", hs: "", as: "" });
 
@@ -486,128 +585,44 @@ function AdminPage({ lang, isAdmin, setIsAdmin, groups, setGroups, fixtures, set
         );
     }
 
-    /* ----- Teams: add / delete ----- */
-    const addTeam = async () => {
-        const name = tName.trim();
-        if (!name) return;
-        const team = {
-            id: `T-${Date.now()}`,
-            name,
-            email: tEmail.trim() || "",
-            logo: "⚽",
-            group: tGroup,
-            played: 0, win: 0, draw: 0, loss: 0, points: 0,
-        };
-        await saveDoc(STORAGE.GROUPS, team);
-        setGroups((prev) => ({ ...prev, [tGroup]: [...prev[tGroup], team] }));
-        setTName(""); setTEmail("");
-    };
-
-    const removeTeam = async (gid, tid) => {
-        await deleteById(STORAGE.GROUPS, tid);
-        setGroups((prev) => ({ ...prev, [gid]: prev[gid].filter((t) => t.id !== tid) }));
-    };
-
-    /* ----- Fixtures: add / update / delete ----- */
-    const addFixture = async () => {
-        if (!newFixture.match) return;
-        const f = { id: `f-${Date.now()}`, ...newFixture };
-        await saveDoc(STORAGE.FIXTURES, f);
-        setFixtures((p) => [...p, f]);
-        setNewFixture({ match: "", date: "", time: "" });
-    };
-
-    const updateFixture = async (id, patch) => {
-        setFixtures((prev) => prev.map((f) => (f.id === id ? { ...f, ...patch } : f)));
-        const updated = fixtures.find((f) => f.id === id);
-        if (updated) await saveDoc(STORAGE.FIXTURES, { ...updated, ...patch });
-    };
-
-    const removeFixture = async (id) => {
-        await deleteById(STORAGE.FIXTURES, id);
-        setFixtures((prev) => prev.filter((f) => f.id !== id));
-    };
-
-    /* ----- Results: add / update / delete ----- */
-    const addResult = async () => {
-        if (!newResult.home || !newResult.away) return;
-        const r = {
-            id: `r-${Date.now()}`,
-            home: newResult.home,
-            away: newResult.away,
-            homeScore: Number(newResult.hs || 0),
-            awayScore: Number(newResult.as || 0),
-        };
-        await saveDoc(STORAGE.RESULTS, r);
-        setResults((p) => [...p, r]);
-        setNewResult({ home: "", away: "", hs: "", as: "" });
-    };
-
-    const updateResult = async (id, patch) => {
-        setResults((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-        const updated = results.find((r) => r.id === id);
-        if (updated) await saveDoc(STORAGE.RESULTS, { ...updated, ...patch });
-    };
-
-    const removeResult = async (id) => {
-        await deleteById(STORAGE.RESULTS, id);
-        setResults((prev) => prev.filter((r) => r.id !== id));
-    };
-
     return (
         <div className="max-w-6xl mx-auto px-4 py-12">
             <h2 className="text-3xl font-bold mb-8 flex items-center gap-2">
                 <Edit className="text-orange-400" /> {T.title}
             </h2>
 
-            {/* TEAMS */}
+            {/* Teams */}
             <section className="mb-10">
                 <h3 className="font-semibold mb-3">{T.teams}</h3>
-
-                {/* Add Team */}
-                <div className="bg-white/5 p-4 rounded-xl border border-white/10 mb-6">
-                    <div className="flex flex-col sm:flex-row gap-2">
-                        <input
-                            value={tName}
-                            onChange={(e) => setTName(e.target.value)}
-                            placeholder={L[lang]?.admin.teamName || "Team Name"}
-                            className="flex-1 bg-zinc-800 rounded-lg px-3 py-2"
-                        />
-                        <input
-                            value={tEmail}
-                            onChange={(e) => setTEmail(e.target.value)}
-                            placeholder={L[lang]?.admin.teamEmail || "Email"}
-                            className="flex-1 bg-zinc-800 rounded-lg px-3 py-2"
-                        />
-                        <select
-                            value={tGroup}
-                            onChange={(e) => setTGroup(e.target.value)}
-                            className="bg-zinc-800 rounded-lg px-3 py-2"
-                        >
-                            <option value="A">A</option><option value="B">B</option><option value="C">C</option>
-                        </select>
-                        <button onClick={addTeam} className="bg-orange-500 hover:bg-orange-400 px-4 py-2 rounded-lg inline-flex items-center justify-center">
-                            <Plus />
-                        </button>
-                    </div>
-                </div>
-
-                {/* Lists */}
                 <div className="grid md:grid-cols-3 gap-6">
                     {Object.entries(groups).map(([gid, list]) => (
                         <div key={gid} className="bg-white/5 p-4 rounded-xl border border-white/10">
                             <h4 className="text-lg font-semibold mb-3">Group {gid}</h4>
-                            {list.length === 0 && <p className="text-white/50">—</p>}
+                            {list.length === 0 && (
+                                <div className="text-white/60 text-sm">—</div>
+                            )}
                             {list.map((t) => (
-                                <div key={t.id} className="flex items-center justify-between bg-black/20 p-2 rounded-lg mb-2">
+                                <div
+                                    key={t.id}
+                                    className="flex items-center justify-between bg-black/20 p-2 rounded-lg mb-2"
+                                >
                                     <span className="truncate">{t.name}</span>
-                                    <button
-                                        className="text-red-400 hover:text-red-500"
-                                        onClick={() => removeTeam(gid, t.id)}
-                                        title="Delete team"
-                                    >
-                                        <Trash2 size={16} />
-                                    </button>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="number"
+                                            className="w-16 text-center bg-zinc-800 rounded-lg"
+                                            value={t.points}
+                                            onChange={(e) => updateTeamPoints(t.id, e.target.value)}
+                                            title="Points"
+                                        />
+                                        <button
+                                            className="text-red-400 hover:text-red-500"
+                                            onClick={() => removeTeam(t.id)}
+                                            title="Delete team"
+                                        >
+                                            <Trash2 size={16} />
+                                        </button>
+                                    </div>
                                 </div>
                             ))}
                         </div>
@@ -615,9 +630,9 @@ function AdminPage({ lang, isAdmin, setIsAdmin, groups, setGroups, fixtures, set
                 </div>
             </section>
 
-            {/* FIXTURES */}
+            {/* Fixtures */}
             <section className="mb-10">
-                <h3 className="font-semibold mb-3">{L[lang]?.admin.addFixture || "Add Fixture"}</h3>
+                <h3 className="font-semibold mb-3">{T.addFixture}</h3>
                 <div className="flex flex-wrap gap-2 mb-4">
                     <input
                         value={newFixture.match}
@@ -637,48 +652,54 @@ function AdminPage({ lang, isAdmin, setIsAdmin, groups, setGroups, fixtures, set
                         onChange={(e) => setNewFixture({ ...newFixture, time: e.target.value })}
                         className="bg-zinc-800 rounded-lg px-3 py-2"
                     />
-                    <button onClick={addFixture} className="bg-orange-500 hover:bg-orange-400 px-4 py-2 rounded-lg">
+                    <button
+                        onClick={() => {
+                            if (newFixture.match) {
+                                addFixtureFS(newFixture);
+                                setNewFixture({ match: "", date: "", time: "" });
+                            }
+                        }}
+                        className="bg-orange-500 hover:bg-orange-400 px-4 py-2 rounded-lg"
+                    >
                         <Plus />
                     </button>
                 </div>
 
-                <h4 className="font-semibold mb-2">{L[lang]?.admin.fixtures || "Edit Fixtures"}</h4>
+                <h4 className="font-semibold mb-2">{L[lang].admin.fixtures}</h4>
                 <div className="space-y-2">
                     {fixtures.map((f) => (
-                        <div key={f.id} className="flex flex-wrap items-center gap-2 bg-white/5 p-3 rounded-lg">
-                            <input
-                                className="flex-1 bg-zinc-800 rounded-lg px-2 py-1"
-                                value={f.match}
-                                onChange={(e) => updateFixture(f.id, { match: e.target.value })}
-                            />
+                        <div
+                            key={f.id}
+                            className="flex flex-wrap items-center gap-2 bg-white/5 p-3 rounded-lg"
+                        >
+                            <span className="flex-1 font-medium">{f.match}</span>
                             <input
                                 type="date"
                                 className="bg-zinc-800 rounded-lg px-2 py-1"
                                 value={f.date || ""}
-                                onChange={(e) => updateFixture(f.id, { date: e.target.value })}
+                                onChange={(e) => updateFixtureFS(f.id, { date: e.target.value })}
                             />
                             <input
                                 type="time"
                                 className="bg-zinc-800 rounded-lg px-2 py-1"
                                 value={f.time || ""}
-                                onChange={(e) => updateFixture(f.id, { time: e.target.value })}
+                                onChange={(e) => updateFixtureFS(f.id, { time: e.target.value })}
                             />
                             <button
                                 className="text-red-400 hover:text-red-500"
-                                onClick={() => removeFixture(f.id)}
-                                title={L[lang]?.admin.delete || "Delete"}
+                                onClick={() => removeFixtureFS(f.id)}
+                                title={T.delete}
                             >
                                 <Trash2 size={18} />
                             </button>
                         </div>
                     ))}
-                    {fixtures.length === 0 && <p className="text-white/50">—</p>}
                 </div>
             </section>
 
-            {/* RESULTS */}
+            {/* Results */}
             <section>
-                <h3 className="font-semibold mb-3">{L[lang]?.admin.addResult || "Add Result"}</h3>
+                <h3 className="font-semibold mb-3">{T.addResult}</h3>
                 <div className="flex flex-wrap gap-2 mb-4">
                     <input
                         value={newResult.home}
@@ -706,47 +727,51 @@ function AdminPage({ lang, isAdmin, setIsAdmin, groups, setGroups, fixtures, set
                         className="w-20 bg-zinc-800 rounded-lg px-2 py-2 text-center"
                         placeholder="A"
                     />
-                    <button onClick={addResult} className="bg-orange-500 hover:bg-orange-400 px-4 py-2 rounded-lg">
+                    <button
+                        onClick={() => {
+                            if (newResult.home && newResult.away) {
+                                addResultFS(newResult);
+                                setNewResult({ home: "", away: "", hs: "", as: "" });
+                            }
+                        }}
+                        className="bg-orange-500 hover:bg-orange-400 px-4 py-2 rounded-lg"
+                    >
                         <Plus />
                     </button>
                 </div>
 
-                <h4 className="font-semibold mb-2">{L[lang]?.admin.results || "Edit Results"}</h4>
+                <h4 className="font-semibold mb-2">{L[lang].admin.results}</h4>
                 <div className="space-y-2">
                     {results.map((r) => (
-                        <div key={r.id} className="grid grid-cols-1 sm:grid-cols-6 items-center gap-2 bg-white/5 p-3 rounded-lg">
-                            <input
-                                className="bg-zinc-800 rounded-lg px-2 py-1 sm:col-span-2"
-                                value={`${r.home} vs ${r.away}`}
-                                onChange={(e) => {
-                                    const val = e.target.value;
-                                    const [home, away] = val.split(" vs ");
-                                    updateResult(r.id, { home: home ?? r.home, away: away ?? r.away });
-                                }}
-                            />
+                        <div
+                            key={r.id}
+                            className="grid grid-cols-1 sm:grid-cols-6 items-center gap-2 bg-white/5 p-3 rounded-lg"
+                        >
+                            <span className="truncate sm:col-span-2">
+                                {r.home} vs {r.away}
+                            </span>
                             <input
                                 type="number"
                                 className="bg-zinc-800 rounded-lg px-2 py-1 text-center"
-                                value={r.homeScore}
-                                onChange={(e) => updateResult(r.id, { homeScore: Number(e.target.value) })}
+                                value={r.homeScore ?? 0}
+                                onChange={(e) => updateResultFS(r.id, { homeScore: Number(e.target.value) })}
                             />
                             <span className="text-center">-</span>
                             <input
                                 type="number"
                                 className="bg-zinc-800 rounded-lg px-2 py-1 text-center"
-                                value={r.awayScore}
-                                onChange={(e) => updateResult(r.id, { awayScore: Number(e.target.value) })}
+                                value={r.awayScore ?? 0}
+                                onChange={(e) => updateResultFS(r.id, { awayScore: Number(e.target.value) })}
                             />
                             <button
                                 className="text-red-400 hover:text-red-500 inline-flex items-center gap-1"
-                                onClick={() => removeResult(r.id)}
-                                title={L[lang]?.admin.delete || "Delete"}
+                                onClick={() => removeResultFS(r.id)}
+                                title={T.delete}
                             >
-                                <Trash2 size={18} /> {L[lang]?.admin.delete || "Delete"}
+                                <Trash2 size={18} /> {T.delete}
                             </button>
                         </div>
                     ))}
-                    {results.length === 0 && <p className="text-white/50">—</p>}
                 </div>
             </section>
         </div>
